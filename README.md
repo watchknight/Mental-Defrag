@@ -7,6 +7,7 @@
 ![Matter.js](https://img.shields.io/badge/Matter.js-Physics-4B8BBE?style=flat)
 ![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Transformers.js-Embeddings-FFD21E?style=flat)
 ![Web Audio API](https://img.shields.io/badge/Web%20Audio%20API-Procedural%20FX-orange?style=flat)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/watchknight/Mental-Defrag)
 
 ---
 
@@ -96,6 +97,23 @@ Preview the production build locally:
 ```bash
 npm run preview
 ```
+
+### Deploying to Render
+
+Deploy Mental Defrag to Render for free as a **Static Site**:
+
+#### Option 1: One-Click Deploy (Blueprint)
+Click the button below to automatically provision the static site on Render using the included `render.yaml`:
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/watchknight/Mental-Defrag)
+
+#### Option 2: Render Dashboard
+1. Go to your [Render Dashboard](https://dashboard.render.com/) and click **New + > Static Site**.
+2. Connect your GitHub repository: `watchknight/Mental-Defrag`.
+3. Provide the build settings:
+   - **Build Command**: `npm install && npm run build`
+   - **Publish Directory**: `dist`
+4. Click **Create Static Site**. Render will build and deploy your project with a global CDN and automatic SSL.
 
 ---
 
