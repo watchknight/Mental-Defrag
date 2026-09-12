@@ -7,19 +7,40 @@ export class CanvasRenderer {
   public canvas: HTMLCanvasElement;
   public ctx: CanvasRenderingContext2D;
   private dpr: number = 1;
+  public logicalWidth: number = window.innerWidth;
+  public logicalHeight: number = window.innerHeight;
 
   constructor(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) {
     this.canvas = canvas;
     this.ctx = ctx;
   }
 
+  public getDpr(): number {
+    return this.dpr;
+  }
+
   /**
-   * Update canvas viewport dimensions and devicePixelRatio scaling
+   * Update canvas viewport dimensions and devicePixelRatio scaling.
+   * Handles window.visualViewport dynamically to avoid mobile address bar jumps.
    */
-  public updateDimensions(): number {
-    this.dpr = window.devicePixelRatio || 1;
-    const width = window.innerWidth;
-    const height = window.innerHeight;
+  public updateDimensions(customWidth?: number, customHeight?: number): number {
+    this.dpr = Math.max(1, window.devicePixelRatio || 1);
+
+    let width = customWidth;
+    let height = customHeight;
+
+    if (width === undefined || height === undefined) {
+      if (window.visualViewport) {
+        width = Math.round(window.visualViewport.width);
+        height = Math.round(window.visualViewport.height);
+      } else {
+        width = window.innerWidth;
+        height = window.innerHeight;
+      }
+    }
+
+    this.logicalWidth = width;
+    this.logicalHeight = height;
 
     this.canvas.width = Math.round(width * this.dpr);
     this.canvas.height = Math.round(height * this.dpr);
@@ -575,8 +596,8 @@ export class CanvasRenderer {
     cursorScreen: { x: number; y: number } | null = null,
     semanticFilaments: SemanticFilament[] = []
   ): BurstParticle[] {
-    const width = window.innerWidth;
-    const height = window.innerHeight;
+    const width = this.logicalWidth;
+    const height = this.logicalHeight;
     const now = performance.now();
 
     // 0. Update velocity trails before drawing

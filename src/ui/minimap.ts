@@ -90,6 +90,11 @@ export class MiniMap {
     window.addEventListener('resize', () => {
       this.setupDpr();
     });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => {
+        this.setupDpr();
+      });
+    }
   }
 
   private setupDpr(): void {

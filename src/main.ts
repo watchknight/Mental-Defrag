@@ -285,43 +285,15 @@ window.addEventListener('keyup', (e: KeyboardEvent) => {
   }
 });
 
-// Panning: Middle-Click OR Space + Left-Click
-canvas.addEventListener('mousedown', (e: MouseEvent) => {
-  if (e.button === 1 || (e.button === 0 && isSpacePressed)) {
-    e.preventDefault();
-    isMousePanning = true;
-    physics.isPanning = true;
-    panStartX = e.clientX;
-    panStartY = e.clientY;
-    updateCursorStyle();
-  }
-});
-
-window.addEventListener('mousemove', (e: MouseEvent) => {
-  if (isMousePanning) {
-    e.preventDefault();
-    const dx = e.clientX - panStartX;
-    const dy = e.clientY - panStartY;
-    panStartX = e.clientX;
-    panStartY = e.clientY;
-    physics.camera.panBy(dx, dy, true);
-  }
-});
-
-window.addEventListener('mouseup', (e: MouseEvent) => {
-  if (isMousePanning) {
-    if (e.button === 1 || e.button === 0) {
-      isMousePanning = false;
-      physics.isPanning = false;
-      updateCursorStyle();
-    }
-  }
-});
-
-// 6. Spawning Interaction (Desktop double-click & Mobile double-tap)
+// 6. Virtual Keyboard Safe Spawner Interaction
 let activeSpawnWrapper: HTMLElement | null = null;
+let activeSpawnCleanup: (() => void) | null = null;
 
 function removeSpawnInput() {
+  if (activeSpawnCleanup) {
+    activeSpawnCleanup();
+    activeSpawnCleanup = null;
+  }
   if (activeSpawnWrapper) {
     activeSpawnWrapper.remove();
     activeSpawnWrapper = null;
@@ -337,7 +309,18 @@ function promptSpawnAt(screenX: number, screenY: number) {
 
   removeSpawnInput();
 
+  // If on a mobile device or screen is cramped, check if screenY will collide with keyboard
+  const viewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  // If in the bottom 45% of the viewport, smoothly pan camera up so input remains visible above keyboard
+  if (screenY > viewportHeight * 0.55) {
+    const targetScreenY = Math.round(viewportHeight * 0.38);
+    const panDy = targetScreenY - screenY;
+    physics.camera.panBy(0, panDy, true);
+    screenY = targetScreenY;
+  }
+
   const wrapper = document.createElement('div');
+  wrapper.className = 'node-spawn-container';
 
   const halo = document.createElement('div');
   halo.className = 'node-spawn-halo';
@@ -351,14 +334,43 @@ function promptSpawnAt(screenX: number, screenY: number) {
   input.style.left = `${screenX}px`;
   input.style.top = `${screenY}px`;
   input.autocomplete = 'off';
+  input.autocapitalize = 'sentences';
 
   wrapper.appendChild(halo);
   wrapper.appendChild(input);
   document.body.appendChild(wrapper);
   activeSpawnWrapper = wrapper;
 
+  // Real-time position tracking relative to visualViewport without camera displacement
+  const repositionInput = () => {
+    const currentScreen = physics.worldToScreen(worldPos.x, worldPos.y);
+    halo.style.left = `${currentScreen.x}px`;
+    halo.style.top = `${currentScreen.y}px`;
+    input.style.left = `${currentScreen.x}px`;
+    input.style.top = `${currentScreen.y}px`;
+  };
+
+  const onViewportResize = () => {
+    repositionInput();
+    input.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    window.scrollTo(0, 0);
+  };
+
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', onViewportResize);
+    window.visualViewport.addEventListener('scroll', onViewportResize);
+  }
+
+  activeSpawnCleanup = () => {
+    if (window.visualViewport) {
+      window.visualViewport.removeEventListener('resize', onViewportResize);
+      window.visualViewport.removeEventListener('scroll', onViewportResize);
+    }
+  };
+
   requestAnimationFrame(() => {
     input.focus();
+    input.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
   });
 
   input.addEventListener('keydown', (evt: KeyboardEvent) => {
@@ -385,16 +397,14 @@ function promptSpawnAt(screenX: number, screenY: number) {
   });
 }
 
-// Double-click on desktop
+// 7. Desktop Double-Click & Right-Click
 canvas.addEventListener('dblclick', (e: MouseEvent) => {
   e.preventDefault();
   promptSpawnAt(e.clientX, e.clientY);
 });
 
-// 7. Right-Click Destruction on Desktop
 canvas.addEventListener('contextmenu', (e: MouseEvent) => {
   e.preventDefault();
-
   const worldPos = physics.screenToWorld(e.clientX, e.clientY);
   const hitBody = physics.getNodeAt(worldPos.x, worldPos.y);
   if (hitBody) {
@@ -403,87 +413,225 @@ canvas.addEventListener('contextmenu', (e: MouseEvent) => {
   }
 });
 
-// 8. Mobile Touch Gestures: Tap-and-Hold to Defrag & Drag to Move & Double-Tap to Spawn
-let touchTimer: number | null = null;
-let touchStartX = 0;
-let touchStartY = 0;
+// 8. Unified Pointer & Touch Gesture System
+interface ActivePointer {
+  id: number;
+  x: number;
+  y: number;
+  startX: number;
+  startY: number;
+  startTime: number;
+  pointerType: string;
+}
+
+const activePointers = new Map<number, ActivePointer>();
+let isMultiTouching = false;
+let initialPinchDist = 0;
+let lastPinchMidX = 0;
+let lastPinchMidY = 0;
+
+// Long-press defrag state (550ms still hold with haptic vibration)
+let longPressTimer: number | null = null;
 let longPressTarget: Matter.Body | null = null;
-let lastTapTime = 0;
-let lastTapX = 0;
-let lastTapY = 0;
+let longPressStartX = 0;
+let longPressStartY = 0;
 
-canvas.addEventListener(
-  'touchstart',
-  (e: TouchEvent) => {
-    if (e.touches.length === 1) {
-      const touch = e.touches[0];
-      touchStartX = touch.clientX;
-      touchStartY = touch.clientY;
-      const worldPos = physics.screenToWorld(touch.clientX, touch.clientY);
-      longPressTarget = physics.getNodeAt(worldPos.x, worldPos.y);
+// Mobile double-tap state (< 300ms, distance < 28px)
+let lastTouchTapTime = 0;
+let lastTouchTapX = 0;
+let lastTouchTapY = 0;
 
-      // Start 500ms long-press defrag timer if touching an existing node
-      if (longPressTarget) {
-        touchTimer = window.setTimeout(() => {
-          if (longPressTarget) {
-            soundFX.playDefrag();
-            physics.defragNode(longPressTarget);
-            longPressTarget = null;
-          }
-        }, 500);
-      }
+canvas.addEventListener('pointerdown', (e: PointerEvent) => {
+  activePointers.set(e.pointerId, {
+    id: e.pointerId,
+    x: e.clientX,
+    y: e.clientY,
+    startX: e.clientX,
+    startY: e.clientY,
+    startTime: performance.now(),
+    pointerType: e.pointerType,
+  });
+
+  // Multi-Touch Pinch & Drag (2 fingers)
+  if (activePointers.size === 2) {
+    if (longPressTimer !== null) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+      longPressTarget = null;
     }
-  },
-  { passive: true }
-);
+    removeSpawnInput();
 
-canvas.addEventListener(
-  'touchmove',
-  (e: TouchEvent) => {
-    if (touchTimer && e.touches.length === 1) {
-      const touch = e.touches[0];
-      const moveDist = Math.hypot(touch.clientX - touchStartX, touch.clientY - touchStartY);
-      // If user moves finger > 10px, cancel long-press to allow smooth dragging
-      if (moveDist > 10) {
-        clearTimeout(touchTimer);
-        touchTimer = null;
-      }
+    isMultiTouching = true;
+    physics.isPanning = true;
+
+    // Disengage mouseConstraint so bodies are not dragged while pinching/panning
+    if (physics.mouseConstraint.body) {
+      (physics.mouseConstraint as unknown as { body: Matter.Body | null }).body = null;
+      physics.mouseConstraint.constraint.bodyB = null;
     }
-  },
-  { passive: true }
-);
 
-canvas.addEventListener('touchend', (e: TouchEvent) => {
-  if (touchTimer) {
-    clearTimeout(touchTimer);
-    touchTimer = null;
+    const ptrs = Array.from(activePointers.values());
+    initialPinchDist = Math.hypot(ptrs[0].x - ptrs[1].x, ptrs[0].y - ptrs[1].y);
+    lastPinchMidX = (ptrs[0].x + ptrs[1].x) / 2;
+    lastPinchMidY = (ptrs[0].y + ptrs[1].y) / 2;
+    return;
   }
 
-  // Mobile double-tap on empty canvas detection
-  if (e.changedTouches.length === 1) {
-    const touch = e.changedTouches[0];
-    const now = performance.now();
-    const timeSinceLastTap = now - lastTapTime;
-    const tapDistance = Math.hypot(touch.clientX - lastTapX, touch.clientY - lastTapY);
+  // Single-touch gesture handling (Long-press 550ms still hold)
+  if (e.pointerType === 'touch' && activePointers.size === 1) {
+    longPressStartX = e.clientX;
+    longPressStartY = e.clientY;
+    const worldPos = physics.screenToWorld(e.clientX, e.clientY);
+    longPressTarget = physics.getNodeAt(worldPos.x, worldPos.y);
 
-    if (timeSinceLastTap < 320 && tapDistance < 25) {
-      const worldPos = physics.screenToWorld(touch.clientX, touch.clientY);
-      const hitBody = physics.getNodeAt(worldPos.x, worldPos.y);
-      if (!hitBody) {
-        promptSpawnAt(touch.clientX, touch.clientY);
+    if (longPressTarget) {
+      if (longPressTimer !== null) {
+        clearTimeout(longPressTimer);
       }
-      lastTapTime = 0;
-    } else {
-      lastTapTime = now;
-      lastTapX = touch.clientX;
-      lastTapY = touch.clientY;
+      longPressTimer = window.setTimeout(() => {
+        if (longPressTarget) {
+          if ('vibrate' in navigator) {
+            try {
+              navigator.vibrate(40);
+            } catch (_) {}
+          }
+          soundFX.playDefrag();
+          physics.defragNode(longPressTarget);
+          longPressTarget = null;
+
+          if (physics.mouseConstraint.body) {
+            (physics.mouseConstraint as unknown as { body: Matter.Body | null }).body = null;
+            physics.mouseConstraint.constraint.bodyB = null;
+          }
+        }
+        longPressTimer = null;
+      }, 550);
+    }
+  }
+
+  // Desktop Mouse Panning: Middle-Click OR Space + Left-Click
+  if (e.pointerType === 'mouse') {
+    if (e.button === 1 || (e.button === 0 && isSpacePressed)) {
+      e.preventDefault();
+      isMousePanning = true;
+      physics.isPanning = true;
+      panStartX = e.clientX;
+      panStartY = e.clientY;
+      updateCursorStyle();
     }
   }
 });
 
-canvas.addEventListener('touchcancel', () => {
-  if (touchTimer) {
-    clearTimeout(touchTimer);
-    touchTimer = null;
+window.addEventListener('pointermove', (e: PointerEvent) => {
+  const ptr = activePointers.get(e.pointerId);
+  if (ptr) {
+    ptr.x = e.clientX;
+    ptr.y = e.clientY;
+  }
+
+  // Two-finger multi-touch pinch-zoom & pan
+  if (activePointers.size === 2 && isMultiTouching) {
+    const ptrs = Array.from(activePointers.values());
+    const currentDist = Math.hypot(ptrs[0].x - ptrs[1].x, ptrs[0].y - ptrs[1].y);
+    const midX = (ptrs[0].x + ptrs[1].x) / 2;
+    const midY = (ptrs[0].y + ptrs[1].y) / 2;
+
+    // 1. Two-finger drag pan
+    const panDx = midX - lastPinchMidX;
+    const panDy = midY - lastPinchMidY;
+    if (Math.abs(panDx) > 0 || Math.abs(panDy) > 0) {
+      physics.camera.panBy(panDx, panDy, true);
+    }
+
+    // 2. Two-finger pinch zoom
+    if (initialPinchDist > 10 && currentDist > 10) {
+      const zoomRatio = currentDist / initialPinchDist;
+      const factor = 1 + (zoomRatio - 1) * 0.45;
+      physics.camera.zoomAt(midX, midY, factor);
+      updateZoomUI(physics.camera.targetZoom);
+      initialPinchDist = currentDist;
+    }
+
+    lastPinchMidX = midX;
+    lastPinchMidY = midY;
+    return;
+  }
+
+  // Single-touch: cancel long-press if finger moves > 8px (to allow smooth dragging)
+  if (longPressTimer !== null) {
+    const dist = Math.hypot(e.clientX - longPressStartX, e.clientY - longPressStartY);
+    if (dist > 8) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+      longPressTarget = null;
+    }
+  }
+
+  // Desktop mouse panning
+  if (isMousePanning) {
+    e.preventDefault();
+    const dx = e.clientX - panStartX;
+    const dy = e.clientY - panStartY;
+    panStartX = e.clientX;
+    panStartY = e.clientY;
+    physics.camera.panBy(dx, dy, true);
+  }
+});
+
+window.addEventListener('pointerup', (e: PointerEvent) => {
+  const ptr = activePointers.get(e.pointerId);
+  activePointers.delete(e.pointerId);
+
+  if (isMultiTouching && activePointers.size < 2) {
+    isMultiTouching = false;
+    physics.isPanning = isMousePanning;
+  }
+
+  if (longPressTimer !== null) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+    longPressTarget = null;
+  }
+
+  if (isMousePanning && (e.button === 1 || e.button === 0)) {
+    isMousePanning = false;
+    physics.isPanning = false;
+    updateCursorStyle();
+  }
+
+  // Mobile Touch Double-Tap to Spawn (< 300ms, distance < 28px)
+  if (ptr && ptr.pointerType === 'touch' && !isMultiTouching) {
+    const moveDist = Math.hypot(e.clientX - ptr.startX, e.clientY - ptr.startY);
+    if (moveDist < 12) {
+      const now = performance.now();
+      const timeSinceLastTap = now - lastTouchTapTime;
+      const tapDistance = Math.hypot(e.clientX - lastTouchTapX, e.clientY - lastTouchTapY);
+
+      if (timeSinceLastTap > 40 && timeSinceLastTap < 300 && tapDistance < 28) {
+        const worldPos = physics.screenToWorld(e.clientX, e.clientY);
+        const hitBody = physics.getNodeAt(worldPos.x, worldPos.y);
+        if (!hitBody) {
+          promptSpawnAt(e.clientX, e.clientY);
+        }
+        lastTouchTapTime = 0;
+      } else {
+        lastTouchTapTime = now;
+        lastTouchTapX = e.clientX;
+        lastTouchTapY = e.clientY;
+      }
+    }
+  }
+});
+
+window.addEventListener('pointercancel', (e: PointerEvent) => {
+  activePointers.delete(e.pointerId);
+  if (activePointers.size < 2) {
+    isMultiTouching = false;
+    physics.isPanning = isMousePanning;
+  }
+  if (longPressTimer !== null) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+    longPressTarget = null;
   }
 });

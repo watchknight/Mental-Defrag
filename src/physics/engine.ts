@@ -102,11 +102,9 @@ export class PhysicsEngine {
     return this.cursorPosition ? { ...this.cursorPosition } : null;
   }
 
-  private handleMouseMove: (e: MouseEvent) => void;
-  private handleMouseLeave: () => void;
-  private handleWindowMouseOut: (e: MouseEvent) => void;
-  private handleTouchMove: (e: TouchEvent) => void;
-  private handleTouchEnd: () => void;
+  private handlePointerMove: (e: PointerEvent) => void;
+  private handlePointerLeave: () => void;
+  private handleWindowPointerOut: (e: PointerEvent) => void;
 
   constructor(options: PhysicsEngineOptions) {
     this.canvas = options.canvas;
@@ -140,7 +138,8 @@ export class PhysicsEngine {
 
     this.semanticForces = new SemanticForcesManager(this.engine);
 
-    // 2. Setup canvas dimensions and DPR
+    // 2. Setup canvas dimensions, touchAction, and DPR
+    this.canvas.style.touchAction = 'none';
     this.dpr = this.renderer.updateDimensions();
 
     // 3. Setup Mouse & MouseConstraint
@@ -164,37 +163,31 @@ export class PhysicsEngine {
       isFixed: false,
     });
 
-    // Window resize handler
+    // Window & VisualViewport resize handlers
     this.handleResize = this.handleResize.bind(this);
     window.addEventListener('resize', this.handleResize);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', this.handleResize);
+      window.visualViewport.addEventListener('scroll', this.handleResize);
+    }
 
-    // 5. Track cursor position and reset when leaving window
-    this.handleMouseMove = (e: MouseEvent) => {
+    // 5. Track cursor position via unified Pointer Events
+    this.handlePointerMove = (e: PointerEvent) => {
       this.cursorPosition = { x: e.clientX, y: e.clientY };
     };
-    this.handleMouseLeave = () => {
+    this.handlePointerLeave = () => {
       this.cursorPosition = null;
     };
-    this.handleWindowMouseOut = (e: MouseEvent) => {
+    this.handleWindowPointerOut = (e: PointerEvent) => {
       if (!e.relatedTarget) {
         this.cursorPosition = null;
       }
     };
-    this.handleTouchMove = (e: TouchEvent) => {
-      if (e.touches.length > 0) {
-        this.cursorPosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      }
-    };
-    this.handleTouchEnd = () => {
-      this.cursorPosition = null;
-    };
 
-    this.canvas.addEventListener('mousemove', this.handleMouseMove);
-    this.canvas.addEventListener('mouseleave', this.handleMouseLeave);
-    window.addEventListener('mouseout', this.handleWindowMouseOut);
-    this.canvas.addEventListener('touchmove', this.handleTouchMove, { passive: true });
-    this.canvas.addEventListener('touchend', this.handleTouchEnd, { passive: true });
-    this.canvas.addEventListener('touchcancel', this.handleTouchEnd, { passive: true });
+    this.canvas.addEventListener('pointermove', this.handlePointerMove);
+    this.canvas.addEventListener('pointerleave', this.handlePointerLeave);
+    this.canvas.addEventListener('pointercancel', this.handlePointerLeave);
+    window.addEventListener('pointerout', this.handleWindowPointerOut);
 
     // 6. Physics Lifecycle Hooks: Mouse Sync, Repulsion Field & Soft Orbital Gravity
     Events.on(this.engine, 'beforeUpdate', () => {
@@ -333,10 +326,20 @@ export class PhysicsEngine {
   }
 
   /**
-   * Window resize handler
+   * Dynamic resize handler using visualViewport when available
    */
   private handleResize(): void {
-    this.dpr = this.renderer.updateDimensions();
+    let width: number;
+    let height: number;
+    if (window.visualViewport) {
+      width = Math.round(window.visualViewport.width);
+      height = Math.round(window.visualViewport.height);
+    } else {
+      width = window.innerWidth;
+      height = window.innerHeight;
+    }
+
+    this.dpr = this.renderer.updateDimensions(width, height);
     if (this.mouse) {
       this.mouse.pixelRatio = this.dpr;
     }
@@ -805,13 +808,15 @@ export class PhysicsEngine {
       this.animFrameId = null;
     }
     this.semanticForces.destroy();
-    this.canvas.removeEventListener('mousemove', this.handleMouseMove);
-    this.canvas.removeEventListener('mouseleave', this.handleMouseLeave);
-    window.removeEventListener('mouseout', this.handleWindowMouseOut);
-    this.canvas.removeEventListener('touchmove', this.handleTouchMove);
-    this.canvas.removeEventListener('touchend', this.handleTouchEnd);
-    this.canvas.removeEventListener('touchcancel', this.handleTouchEnd);
+    this.canvas.removeEventListener('pointermove', this.handlePointerMove);
+    this.canvas.removeEventListener('pointerleave', this.handlePointerLeave);
+    this.canvas.removeEventListener('pointercancel', this.handlePointerLeave);
+    window.removeEventListener('pointerout', this.handleWindowPointerOut);
     window.removeEventListener('resize', this.handleResize);
+    if (window.visualViewport) {
+      window.visualViewport.removeEventListener('resize', this.handleResize);
+      window.visualViewport.removeEventListener('scroll', this.handleResize);
+    }
     Runner.stop(this.runner);
     Composite.clear(this.engine.world, false);
     Engine.clear(this.engine);

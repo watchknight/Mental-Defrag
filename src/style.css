@@ -8,18 +8,22 @@ html, body {
   width: 100%;
   height: 100%;
   overflow: hidden;
+  overscroll-behavior: none;
   background-color: #0a0a0c;
   color: #e2e8f0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   user-select: none;
   -webkit-user-select: none;
+  touch-action: none;
 }
 
 #app {
   position: relative;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
+  touch-action: none;
 }
 
 #physics-canvas {
@@ -244,6 +248,14 @@ html, body {
 .node-inline-input::placeholder {
   color: rgba(255, 255, 255, 0.28);
   font-style: italic;
+}
+
+@media (pointer: coarse) {
+  .node-inline-input {
+    font-size: 16px;
+    width: 220px;
+    padding: 6px 10px;
+  }
 }
 
 /* Subtle preview ring behind the input while typing */
