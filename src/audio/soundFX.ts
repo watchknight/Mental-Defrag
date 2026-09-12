@@ -9,10 +9,14 @@ export class SoundFX {
   private noiseBuffer: AudioBuffer | null = null;
 
   constructor() {
-    // Check stored mute preference
-    const storedMute = localStorage.getItem('mental_defrag_muted');
-    if (storedMute !== null) {
-      this.isMuted = storedMute === 'true';
+    // Check stored mute preference safely
+    try {
+      const storedMute = localStorage.getItem('mental_defrag_muted');
+      if (storedMute !== null) {
+        this.isMuted = storedMute === 'true';
+      }
+    } catch {
+      // Ignore storage access error in private browsing
     }
     this.setupAutoplayUnlock();
   }
@@ -213,7 +217,11 @@ export class SoundFX {
    */
   public toggleMute(): boolean {
     this.isMuted = !this.isMuted;
-    localStorage.setItem('mental_defrag_muted', String(this.isMuted));
+    try {
+      localStorage.setItem('mental_defrag_muted', String(this.isMuted));
+    } catch {
+      // Ignore storage quota or access errors in private browsing
+    }
 
     if (this.masterGain && this.ctx) {
       this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : 1, this.ctx.currentTime);

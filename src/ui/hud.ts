@@ -58,9 +58,13 @@ export class HUD {
     this.isMuted = options.initialSoundMuted;
     this.isAutoCluster = options.initialAutoCluster;
 
-    // Check saved collapsed state for desktop shortcut bar
-    const savedCollapsed = localStorage.getItem('mental_defrag_hud_shortcuts_collapsed');
-    this.isShortcutsCollapsed = savedCollapsed === 'true';
+    // Check saved collapsed state for desktop shortcut bar safely
+    try {
+      const savedCollapsed = localStorage.getItem('mental_defrag_hud_shortcuts_collapsed');
+      this.isShortcutsCollapsed = savedCollapsed === 'true';
+    } catch {
+      this.isShortcutsCollapsed = false;
+    }
 
     this.initHUD();
   }
@@ -286,7 +290,11 @@ export class HUD {
    */
   public setShortcutsCollapsed(collapsed: boolean): void {
     this.isShortcutsCollapsed = collapsed;
-    localStorage.setItem('mental_defrag_hud_shortcuts_collapsed', String(collapsed));
+    try {
+      localStorage.setItem('mental_defrag_hud_shortcuts_collapsed', String(collapsed));
+    } catch {
+      // Ignore storage errors in private browsing or quota limits
+    }
 
     if (this.shortcutBarElement) {
       if (collapsed) {

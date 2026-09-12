@@ -258,8 +258,11 @@ export class PhysicsEngine {
     this.canvas.addEventListener('pointercancel', this.handlePointerLeave);
     window.addEventListener('pointerout', this.handleWindowPointerOut);
 
-    // 6. Physics Lifecycle Hooks: Mouse Sync, Repulsion Field & Soft Orbital Gravity
+    // 6. Physics Lifecycle Hooks: Mouse Sync, Repulsion Field, Soft Orbital Gravity, & Guardrails
     Events.on(this.engine, 'beforeUpdate', () => {
+      // 0. Pre-tick NaN & Tunneling Guardrails
+      this.applyPhysicsGuardrails();
+
       // Synchronize Matter.Mouse with Camera transform
       Matter.Mouse.setOffset(this.mouse, {
         x: -this.camera.x / this.camera.zoom,
@@ -334,6 +337,11 @@ export class PhysicsEngine {
       );
     });
 
+    Events.on(this.engine, 'afterUpdate', () => {
+      // Post-tick NaN & Tunneling Guardrails
+      this.applyPhysicsGuardrails();
+    });
+
     // Drag events
     Events.on(this.mouseConstraint, 'startdrag', () => {
       if (this.onDragStart && !this.isPanning) {
@@ -359,6 +367,50 @@ export class PhysicsEngine {
         }
       }
     });
+  }
+
+  /**
+   * NaN and Physics Tunneling Guardrails:
+   * - In beforeUpdate and afterUpdate ticks:
+   *   - Check for invalid coordinates (isNaN(x), isNaN(y), !isFinite(speed)). If a body receives NaN, reset its velocity to {x: 0, y: 0} and restore it to origin.
+   *   - Cap maximum body velocity (clamp(velocity, -25, 25)) to prevent high-speed tunneling through boundary constraints during extreme collisions.
+   */
+  public applyPhysicsGuardrails(): void {
+    const MAX_VELOCITY = 25;
+    const bodies = this.nodeBodies;
+
+    for (let i = 0; i < bodies.length; i++) {
+      const body = bodies[i];
+      const pos = body.position;
+      const vel = body.velocity;
+
+      // 1. Guard against NaN or non-finite position / velocity / speed
+      if (
+        isNaN(pos.x) ||
+        isNaN(pos.y) ||
+        !isFinite(pos.x) ||
+        !isFinite(pos.y) ||
+        isNaN(vel.x) ||
+        isNaN(vel.y) ||
+        !isFinite(vel.x) ||
+        !isFinite(vel.y) ||
+        isNaN(body.speed) ||
+        !isFinite(body.speed)
+      ) {
+        Body.setPosition(body, { x: 0, y: 0 });
+        Body.setVelocity(body, { x: 0, y: 0 });
+        Body.setAngularVelocity(body, 0);
+        continue;
+      }
+
+      // 2. Velocity clamping to prevent physics tunneling
+      const clampedVx = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, vel.x));
+      const clampedVy = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, vel.y));
+
+      if (clampedVx !== vel.x || clampedVy !== vel.y) {
+        Body.setVelocity(body, { x: clampedVx, y: clampedVy });
+      }
+    }
   }
 
   /**
@@ -724,59 +776,76 @@ export class PhysicsEngine {
 
     const nodeMap = new Map<string, Matter.Body>();
 
-    // 1. Recreate all circular bodies in world coordinates
+    // 1. Recreate all circular bodies in world coordinates with defensive validation
     for (const data of serializedNodes) {
-      const radius = calculateNodeRadius(data.text);
+      try {
+        if (!data || typeof data !== 'object') continue;
+        const text = typeof data.text === 'string' ? data.text : '';
+        const x = typeof data.x === 'number' && isFinite(data.x) && !isNaN(data.x) ? data.x : 0;
+        const y = typeof data.y === 'number' && isFinite(data.y) && !isNaN(data.y) ? data.y : 0;
 
-      const body = Bodies.circle(data.x, data.y, radius, {
-        restitution: 0.8,
-        frictionAir: 0.04,
-        friction: 0.05,
-        label: 'thought-node',
-      });
+        const radius = calculateNodeRadius(text);
 
-      const fastEmbedding = createFastPathEmbedding(data.text);
+        const body = Bodies.circle(x, y, radius, {
+          restitution: 0.8,
+          frictionAir: 0.04,
+          friction: 0.05,
+          label: 'thought-node',
+        });
 
-      const nodeData: NodeData = {
-        id: data.id,
-        text: data.text,
-        radius,
-        createdAt: Date.now(),
-        trail: [],
-        embedding: fastEmbedding,
-      };
+        const fastEmbedding = createFastPathEmbedding(text);
 
-      (body as unknown as { nodeData: NodeData }).nodeData = nodeData;
+        const nodeData: NodeData = {
+          id: data.id || `node-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+          text,
+          radius,
+          createdAt: Date.now(),
+          trail: [],
+          embedding: fastEmbedding,
+        };
 
-      computeEmbedding(data.text)
-        .then((denseVec) => {
-          nodeData.embedding = denseVec;
-          this.refreshClusters();
-        })
-        .catch(() => {});
+        (body as unknown as { nodeData: NodeData }).nodeData = nodeData;
 
-      Composite.add(this.engine.world, body);
-      this.nodeBodies.push(body);
-      nodeMap.set(data.id, body);
+        computeEmbedding(text)
+          .then((denseVec) => {
+            nodeData.embedding = denseVec;
+            this.refreshClusters();
+          })
+          .catch(() => {});
+
+        Composite.add(this.engine.world, body);
+        this.nodeBodies.push(body);
+        nodeMap.set(nodeData.id, body);
+      } catch (err) {
+        console.warn('[Engine] Skipped corrupt node during restore:', data, err);
+      }
     }
 
     // 2. Recreate all constraints without duplicates
     for (const data of serializedNodes) {
+      if (!data || !data.id || !Array.isArray(data.links)) continue;
       const bodyA = nodeMap.get(data.id);
-      if (!bodyA || !data.links) continue;
+      if (!bodyA) continue;
 
       for (const targetId of data.links) {
-        const bodyB = nodeMap.get(targetId);
-        if (!bodyB || bodyA === bodyB) continue;
+        try {
+          if (!targetId || typeof targetId !== 'string') continue;
+          const bodyB = nodeMap.get(targetId);
+          if (!bodyB || bodyA === bodyB) continue;
 
-        if (this.hasConnection(bodyA, bodyB)) continue;
+          if (this.hasConnection(bodyA, bodyB)) continue;
 
-        const restLength = Math.hypot(
-          bodyB.position.x - bodyA.position.x,
-          bodyB.position.y - bodyA.position.y
-        );
+          const restLength = Math.hypot(
+            bodyB.position.x - bodyA.position.x,
+            bodyB.position.y - bodyA.position.y
+          );
 
-        this.createSpringConstraint(bodyA, bodyB, restLength);
+          if (!isFinite(restLength) || isNaN(restLength) || restLength <= 0) continue;
+
+          this.createSpringConstraint(bodyA, bodyB, restLength);
+        } catch (err) {
+          console.warn('[Engine] Failed to reconnect spring constraint:', err);
+        }
       }
     }
 

@@ -32,7 +32,7 @@ export class NodeManager {
       this.clearAll();
     }
 
-    // 2. Compute coordinates offset and handle ID remapping
+    // 2. Compute coordinates offset and handle ID remapping safely
     const existingIds = new Set(
       this.physics.nodeBodies.map((b) => (b as unknown as { nodeData?: { id: string } }).nodeData?.id).filter(Boolean)
     );
@@ -43,16 +43,20 @@ export class NodeManager {
     if (mode === 'merge' && dropWorldPos) {
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
       for (const n of rawNodes) {
-        minX = Math.min(minX, n.x);
-        maxX = Math.max(maxX, n.x);
-        minY = Math.min(minY, n.y);
-        maxY = Math.max(maxY, n.y);
+        if (!n || typeof n !== 'object') continue;
+        const nx = typeof n.x === 'number' && isFinite(n.x) ? n.x : 0;
+        const ny = typeof n.y === 'number' && isFinite(n.y) ? n.y : 0;
+        minX = Math.min(minX, nx);
+        maxX = Math.max(maxX, nx);
+        minY = Math.min(minY, ny);
+        maxY = Math.max(maxY, ny);
       }
-      const centroidX = (minX + maxX) / 2;
-      const centroidY = (minY + maxY) / 2;
-
-      offsetX = dropWorldPos.x - centroidX;
-      offsetY = dropWorldPos.y - centroidY;
+      if (isFinite(minX) && isFinite(maxX) && isFinite(minY) && isFinite(maxY)) {
+        const centroidX = (minX + maxX) / 2;
+        const centroidY = (minY + maxY) / 2;
+        offsetX = dropWorldPos.x - centroidX;
+        offsetY = dropWorldPos.y - centroidY;
+      }
     }
 
     // ID remap table
@@ -60,28 +64,37 @@ export class NodeManager {
     const preparedNodes: ParsedImportNode[] = [];
 
     for (const n of rawNodes) {
-      let targetId = n.id;
+      if (!n || typeof n !== 'object') continue;
+      let targetId = typeof n.id === 'string' && n.id.trim() ? n.id : `node-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
       if (mode === 'merge' && existingIds.has(n.id)) {
-        targetId = `${n.id}-${Date.now().toString(36)}-${Math.random().toString(36).substr(2, 4)}`;
+        targetId = `${targetId}-${Date.now().toString(36)}-${Math.random().toString(36).substr(2, 4)}`;
       }
       idMap.set(n.id, targetId);
 
+      const rawX = typeof n.x === 'number' && isFinite(n.x) ? n.x : 0;
+      const rawY = typeof n.y === 'number' && isFinite(n.y) ? n.y : 0;
+
       preparedNodes.push({
         id: targetId,
-        text: n.text,
-        x: Math.round(n.x + offsetX),
-        y: Math.round(n.y + offsetY),
+        text: typeof n.text === 'string' ? n.text : '',
+        x: Math.round(rawX + offsetX),
+        y: Math.round(rawY + offsetY),
         color: n.color,
       });
     }
 
+    if (preparedNodes.length === 0) {
+      showHudToast('No valid thought nodes could be parsed');
+      return;
+    }
+
     // Map links to new IDs
-    const preparedLinks = data.links
+    const preparedLinks = (Array.isArray(data.links) ? data.links : [])
       .map((link) => ({
         from: idMap.get(link.from) || link.from,
         to: idMap.get(link.to) || link.to,
       }))
-      .filter((link) => link.from !== link.to);
+      .filter((link) => link.from && link.to && link.from !== link.to);
 
     // 3. Staggered Spawning over 200ms
     const totalBatches = Math.min(15, preparedNodes.length);
@@ -96,18 +109,22 @@ export class NodeManager {
         const batchEnd = Math.min(preparedNodes.length, currentIndex + batchSize);
 
         for (let i = currentIndex; i < batchEnd; i++) {
-          const n = preparedNodes[i];
-          const body = this.physics.createNode(n.x, n.y, n.text, n.id);
+          try {
+            const n = preparedNodes[i];
+            const body = this.physics.createNode(n.x, n.y, n.text, n.id);
 
-          // Apply temporary higher air friction damping to prevent collision repulsion shocks
-          body.frictionAir = 0.08;
-          window.setTimeout(() => {
-            if (body) {
-              body.frictionAir = 0.04;
-            }
-          }, 1000);
+            // Apply temporary higher air friction damping to prevent collision repulsion shocks
+            body.frictionAir = 0.08;
+            window.setTimeout(() => {
+              if (body) {
+                body.frictionAir = 0.04;
+              }
+            }, 1000);
 
-          spawnedBodies.set(n.id, body);
+            spawnedBodies.set(n.id, body);
+          } catch (err) {
+            console.warn('[NodeManager] Failed to spawn imported node:', err);
+          }
         }
 
         currentIndex = batchEnd;
@@ -125,23 +142,32 @@ export class NodeManager {
     // 4. Reconnect spring constraints
     let createdLinksCount = 0;
     for (const link of preparedLinks) {
-      const bodyA = spawnedBodies.get(link.from) || this.findBodyById(link.from);
-      const bodyB = spawnedBodies.get(link.to) || this.findBodyById(link.to);
+      try {
+        const bodyA = spawnedBodies.get(link.from) || this.findBodyById(link.from);
+        const bodyB = spawnedBodies.get(link.to) || this.findBodyById(link.to);
 
-      if (bodyA && bodyB && bodyA !== bodyB) {
-        if (!this.physics.hasConnection(bodyA, bodyB)) {
-          const dist = Math.hypot(bodyB.position.x - bodyA.position.x, bodyB.position.y - bodyA.position.y);
-          this.physics.createSpringConstraint(bodyA, bodyB, Math.max(80, Math.min(dist, 320)));
-          createdLinksCount++;
+        if (bodyA && bodyB && bodyA !== bodyB) {
+          if (!this.physics.hasConnection(bodyA, bodyB)) {
+            const dist = Math.hypot(bodyB.position.x - bodyA.position.x, bodyB.position.y - bodyA.position.y);
+            if (isFinite(dist) && !isNaN(dist) && dist > 0) {
+              this.physics.createSpringConstraint(bodyA, bodyB, Math.max(80, Math.min(dist, 320)));
+              createdLinksCount++;
+            }
+          }
         }
+      } catch (err) {
+        console.warn('[NodeManager] Failed to connect spring constraint:', err);
       }
     }
 
     // 5. Camera Reframing
     if (mode === 'replace' && data.camera && typeof data.camera.zoom === 'number') {
-      this.physics.camera.targetX = data.camera.x;
-      this.physics.camera.targetY = data.camera.y;
-      this.physics.camera.targetZoom = Math.max(0.25, Math.min(3.0, data.camera.zoom));
+      const camX = typeof data.camera.x === 'number' && isFinite(data.camera.x) ? data.camera.x : 0;
+      const camY = typeof data.camera.y === 'number' && isFinite(data.camera.y) ? data.camera.y : 0;
+      const camZoom = typeof data.camera.zoom === 'number' && isFinite(data.camera.zoom) ? data.camera.zoom : 1.0;
+      this.physics.camera.targetX = camX;
+      this.physics.camera.targetY = camY;
+      this.physics.camera.targetZoom = Math.max(0.25, Math.min(3.0, camZoom));
     } else {
       this.reframeCameraToNodes(Array.from(spawnedBodies.values()));
     }
@@ -191,11 +217,19 @@ export class NodeManager {
 
     for (let i = 0; i < nodes.length; i++) {
       const b = nodes[i];
+      if (!b || !b.position || isNaN(b.position.x) || isNaN(b.position.y)) continue;
       const radius = (b as unknown as { nodeData?: { radius: number } }).nodeData?.radius || 50;
       minX = Math.min(minX, b.position.x - radius);
       maxX = Math.max(maxX, b.position.x + radius);
       minY = Math.min(minY, b.position.y - radius);
       maxY = Math.max(maxY, b.position.y + radius);
+    }
+
+    if (!isFinite(minX) || !isFinite(maxX) || !isFinite(minY) || !isFinite(maxY)) {
+      this.physics.camera.targetZoom = 1.0;
+      this.physics.camera.targetX = window.innerWidth / 2;
+      this.physics.camera.targetY = window.innerHeight / 2;
+      return;
     }
 
     const spanW = Math.max(140, maxX - minX);

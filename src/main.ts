@@ -100,12 +100,16 @@ physics.onAfterRender = () => {
   minimap.render(physics.nodeBodies, physics.springConstraints, physics.camera);
 };
 
-// 4. Session Restore: Attempt to read saved state from localStorage
-const savedState = loadCanvasState();
+// 4. Session Restore: Safely load saved state from localStorage
 let isRestored = false;
-
-if (savedState && savedState.length > 0) {
-  isRestored = physics.restoreState(savedState);
+try {
+  const savedState = loadCanvasState();
+  if (savedState && savedState.length > 0) {
+    isRestored = physics.restoreState(savedState);
+  }
+} catch (err) {
+  console.warn('[Main] Error restoring session state:', err);
+  isRestored = false;
 }
 
 // Fallback: spawn introductory nodes if no prior session exists
