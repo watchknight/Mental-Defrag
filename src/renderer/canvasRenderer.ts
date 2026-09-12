@@ -9,10 +9,59 @@ export class CanvasRenderer {
   private dpr: number = 1;
   public logicalWidth: number = window.innerWidth;
   public logicalHeight: number = window.innerHeight;
+  private glowSpriteCache: Map<string, HTMLCanvasElement> = new Map();
+  private glassGradientCache: Map<number, CanvasGradient> = new Map();
 
   constructor(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) {
     this.canvas = canvas;
     this.ctx = ctx;
+  }
+
+  /**
+   * Retrieves or pre-renders an offscreen radial glow sprite for a cluster RGB.
+   * Eliminates per-frame createRadialGradient / arc fill overhead.
+   */
+  private getGlowSprite(rgb: { r: number; g: number; b: number }): HTMLCanvasElement {
+    const key = `${rgb.r},${rgb.g},${rgb.b}`;
+    let sprite = this.glowSpriteCache.get(key);
+    if (!sprite) {
+      sprite = document.createElement('canvas');
+      const size = 128;
+      sprite.width = size;
+      sprite.height = size;
+      const sCtx = sprite.getContext('2d');
+      if (sCtx) {
+        const center = size / 2;
+        const radius = size / 2;
+        const innerRadius = radius * 0.45;
+        const grad = sCtx.createRadialGradient(center, center, innerRadius, center, center, radius);
+        grad.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`);
+        grad.addColorStop(0.5, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.45)`);
+        grad.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+        sCtx.fillStyle = grad;
+        sCtx.beginPath();
+        sCtx.arc(center, center, radius, 0, Math.PI * 2);
+        sCtx.fill();
+      }
+      this.glowSpriteCache.set(key, sprite);
+    }
+    return sprite;
+  }
+
+  /**
+   * Retrieves or caches a linear specular reflection gradient relative to node origin (0, 0).
+   */
+  private getGlassGradient(radius: number): CanvasGradient {
+    const roundedRadius = Math.round(radius);
+    let grad = this.glassGradientCache.get(roundedRadius);
+    if (!grad) {
+      grad = this.ctx.createLinearGradient(0, -roundedRadius, 0, roundedRadius * 0.4);
+      grad.addColorStop(0, 'rgba(255, 255, 255, 0.07)');
+      grad.addColorStop(0.5, 'rgba(255, 255, 255, 0.02)');
+      grad.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
+      this.glassGradientCache.set(roundedRadius, grad);
+    }
+    return grad;
   }
 
   public getDpr(): number {
@@ -177,17 +226,35 @@ export class CanvasRenderer {
   }
 
   /**
-   * Render velocity trails before the node bodies
+   * Render velocity trails before the node bodies (culled against camera frustum)
    */
-  private renderVelocityTrails(nodeBodies: Matter.Body[]): void {
+  private renderVelocityTrails(
+    nodeBodies: Matter.Body[],
+    cullMinX: number,
+    cullMaxX: number,
+    cullMinY: number,
+    cullMaxY: number
+  ): void {
     for (let n = 0; n < nodeBodies.length; n++) {
       const body = nodeBodies[n];
       const nodeData = (body as unknown as { nodeData?: NodeData }).nodeData;
       if (!nodeData || !nodeData.trail || nodeData.trail.length === 0) continue;
 
+      const baseRadius = nodeData.radius;
+      const { x, y } = body.position;
+
+      // Viewport frustum culling
+      if (
+        x + baseRadius < cullMinX ||
+        x - baseRadius > cullMaxX ||
+        y + baseRadius < cullMinY ||
+        y - baseRadius > cullMaxY
+      ) {
+        continue;
+      }
+
       const trail = nodeData.trail;
       const count = trail.length;
-      const baseRadius = nodeData.radius;
 
       for (let i = 0; i < count; i++) {
         const pt = trail[i];
@@ -195,52 +262,70 @@ export class CanvasRenderer {
         const radius = Math.max(8, baseRadius * (0.35 + decay * 0.55));
         const alpha = 0.03 + decay * 0.17;
 
-        this.ctx.save();
         this.ctx.beginPath();
         this.ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
         this.ctx.fillStyle = `rgba(120, 170, 255, ${alpha.toFixed(3)})`;
         this.ctx.fill();
-        this.ctx.restore();
       }
     }
   }
 
   /**
-   * Render ambient breathing glow behind every node
+   * Render ambient breathing glow behind every node using cached offscreen sprites and frustum culling
    */
-  private renderBreathingGlows(nodeBodies: Matter.Body[], time: number): void {
+  private renderBreathingGlows(
+    nodeBodies: Matter.Body[],
+    time: number,
+    cullMinX: number,
+    cullMaxX: number,
+    cullMinY: number,
+    cullMaxY: number
+  ): void {
     const wave = (Math.sin(time * 0.003) + 1) / 2;
-    const alpha = 0.10 + wave * (0.25 - 0.10);
+    const baseAlpha = 0.10 + wave * (0.25 - 0.10);
 
+    this.ctx.save();
     for (let i = 0; i < nodeBodies.length; i++) {
       const body = nodeBodies[i];
       const nodeData = (body as unknown as { nodeData?: NodeData }).nodeData;
       const radius = nodeData ? nodeData.radius : (body.circleRadius || 42);
       const { x, y } = body.position;
 
-      const innerRadius = radius * 0.72;
       const outerRadius = radius + 8 + wave * 14;
 
+      // Viewport frustum culling
+      if (
+        x + outerRadius < cullMinX ||
+        x - outerRadius > cullMaxX ||
+        y + outerRadius < cullMinY ||
+        y - outerRadius > cullMaxY
+      ) {
+        continue;
+      }
+
       const rgb = nodeData?.clusterColor?.rgb || { r: 120, g: 170, b: 255 };
+      const sprite = this.getGlowSprite(rgb);
 
-      this.ctx.save();
-      const glowGrad = this.ctx.createRadialGradient(x, y, innerRadius, x, y, outerRadius);
-      glowGrad.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha.toFixed(3)})`);
-      glowGrad.addColorStop(0.5, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${(alpha * 0.45).toFixed(3)})`);
-      glowGrad.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
-
-      this.ctx.fillStyle = glowGrad;
-      this.ctx.beginPath();
-      this.ctx.arc(x, y, outerRadius, 0, Math.PI * 2);
-      this.ctx.fill();
-      this.ctx.restore();
+      this.ctx.globalAlpha = baseAlpha;
+      this.ctx.drawImage(
+        sprite,
+        x - outerRadius,
+        y - outerRadius,
+        outerRadius * 2,
+        outerRadius * 2
+      );
     }
+    this.ctx.restore();
   }
 
   /**
-   * Break text into wrapped lines fitted to node diameter
+   * Break text into wrapped lines fitted to node diameter, cached on nodeData
    */
-  private wrapText(text: string, maxWidth: number): string[] {
+  private wrapText(nodeData: NodeData | undefined, text: string, maxWidth: number): string[] {
+    if (nodeData?.wrappedLines) {
+      return nodeData.wrappedLines;
+    }
+
     const words = text.split(/\s+/);
     const lines: string[] = [];
     let currentLine = '';
@@ -262,13 +347,24 @@ export class CanvasRenderer {
       lines.push(currentLine);
     }
 
-    return lines.length > 0 ? lines : [text];
+    const result = lines.length > 0 ? lines : [text];
+    if (nodeData) {
+      nodeData.wrappedLines = result;
+    }
+    return result;
   }
 
   /**
-   * Render spring constraints with organic quadratic Bézier curves
+   * Render spring constraints with organic quadratic Bézier curves (culled against camera frustum)
    */
-  private renderSpringConstraints(springConstraints: Matter.Constraint[]): void {
+  private renderSpringConstraints(
+    springConstraints: Matter.Constraint[],
+    cullMinX: number,
+    cullMaxX: number,
+    cullMinY: number,
+    cullMaxY: number
+  ): void {
+    this.ctx.save();
     for (let i = 0; i < springConstraints.length; i++) {
       const constraint = springConstraints[i];
       const bodyA = constraint.bodyA;
@@ -279,6 +375,16 @@ export class CanvasRenderer {
       const y1 = bodyA.position.y;
       const x2 = bodyB.position.x;
       const y2 = bodyB.position.y;
+
+      // Frustum culling: bounding box of spring line segment
+      const minX = x1 < x2 ? x1 : x2;
+      const maxX = x1 > x2 ? x1 : x2;
+      const minY = y1 < y2 ? y1 : y2;
+      const maxY = y1 > y2 ? y1 : y2;
+
+      if (maxX < cullMinX || minX > cullMaxX || maxY < cullMinY || minY > cullMaxY) {
+        continue;
+      }
 
       const dx = x2 - x1;
       const dy = y2 - y1;
@@ -308,7 +414,6 @@ export class CanvasRenderer {
       const cx = mx + nx * sag;
       const cy = my + ny * sag;
 
-      this.ctx.save();
       this.ctx.beginPath();
       this.ctx.moveTo(x1, y1);
       this.ctx.quadraticCurveTo(cx, cy, x2, y2);
@@ -321,9 +426,8 @@ export class CanvasRenderer {
         this.ctx.lineWidth = 2.5;
         this.ctx.stroke();
       }
-
-      this.ctx.restore();
     }
+    this.ctx.restore();
   }
 
   /**
@@ -403,17 +507,36 @@ export class CanvasRenderer {
   }
 
   /**
-   * Render glassmorphic circular nodes with drop shadow, 1px border, and centered monospace text
+   * Render glassmorphic circular nodes with drop shadow, 1px border, and centered monospace text.
+   * Culled against camera viewport frustum. Uses cached specular gradients and wrapped text.
    */
-  private renderNodeBodies(nodeBodies: Matter.Body[]): void {
+  private renderNodeBodies(
+    nodeBodies: Matter.Body[],
+    cullMinX: number,
+    cullMaxX: number,
+    cullMinY: number,
+    cullMaxY: number
+  ): void {
     for (let i = 0; i < nodeBodies.length; i++) {
       const body = nodeBodies[i];
       const nodeData = (body as unknown as { nodeData?: NodeData }).nodeData;
       const { x, y } = body.position;
       const radius = nodeData ? nodeData.radius : (body.circleRadius || 42);
+
+      // Frustum culling check
+      if (
+        x + radius < cullMinX ||
+        x - radius > cullMaxX ||
+        y + radius < cullMinY ||
+        y - radius > cullMaxY
+      ) {
+        continue;
+      }
+
       const text = nodeData ? nodeData.text : '';
 
       this.ctx.save();
+      this.ctx.translate(x, y);
 
       // Soft Outer Drop Shadow
       this.ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
@@ -423,7 +546,7 @@ export class CanvasRenderer {
 
       // Dark semi-transparent circular body (rgba(25, 25, 30, 0.75))
       this.ctx.beginPath();
-      this.ctx.arc(x, y, radius, 0, Math.PI * 2);
+      this.ctx.arc(0, 0, radius, 0, Math.PI * 2);
       this.ctx.fillStyle = 'rgba(25, 25, 30, 0.75)';
       this.ctx.fill();
 
@@ -441,14 +564,10 @@ export class CanvasRenderer {
       }
       this.ctx.stroke();
 
-      // Subtle specular glass gradient reflection on top half
-      const glassGrad = this.ctx.createLinearGradient(x, y - radius, x, y + radius * 0.4);
-      glassGrad.addColorStop(0, 'rgba(255, 255, 255, 0.07)');
-      glassGrad.addColorStop(0.5, 'rgba(255, 255, 255, 0.02)');
-      glassGrad.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
-      this.ctx.fillStyle = glassGrad;
+      // Subtle specular glass gradient reflection on top half (cached!)
+      this.ctx.fillStyle = this.getGlassGradient(radius);
       this.ctx.beginPath();
-      this.ctx.arc(x, y, radius - 0.5, 0, Math.PI * 2);
+      this.ctx.arc(0, 0, radius - 0.5, 0, Math.PI * 2);
       this.ctx.fill();
 
       // Monospace Text Rendering
@@ -460,13 +579,13 @@ export class CanvasRenderer {
         this.ctx.textBaseline = 'middle';
 
         const maxTextWidth = radius * 1.42;
-        const lines = this.wrapText(text, maxTextWidth);
+        const lines = this.wrapText(nodeData, text, maxTextWidth);
         const lineHeight = fontSize * 1.35;
         const totalHeight = (lines.length - 1) * lineHeight;
-        const startY = y - totalHeight / 2;
+        const startY = -totalHeight / 2;
 
         for (let l = 0; l < lines.length; l++) {
-          this.ctx.fillText(lines[l], x, startY + l * lineHeight);
+          this.ctx.fillText(lines[l], 0, startY + l * lineHeight);
         }
       }
 
@@ -475,21 +594,28 @@ export class CanvasRenderer {
   }
 
   /**
-   * Render defrag burst particles and clean dead ones
+   * Update and render pooled defrag burst particles in-place without memory allocations.
+   * Culled against camera viewport frustum.
    */
-  public renderBurstParticles(particles: BurstParticle[]): BurstParticle[] {
-    if (particles.length === 0) return particles;
+  public renderBurstParticles(
+    particles: BurstParticle[],
+    cullMinX: number,
+    cullMaxX: number,
+    cullMinY: number,
+    cullMaxY: number
+  ): void {
+    if (particles.length === 0) return;
 
     const now = performance.now();
-    const active: BurstParticle[] = [];
-
     this.ctx.save();
 
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i];
-      const elapsed = now - p.birthTime;
+      if (!p.active) continue;
 
+      const elapsed = now - p.birthTime;
       if (elapsed >= p.lifetime) {
+        p.active = false;
         continue;
       }
 
@@ -498,11 +624,15 @@ export class CanvasRenderer {
       p.vx *= 0.95;
       p.vy *= 0.95;
 
+      // Viewport frustum culling for particle drawing
+      if (p.x < cullMinX || p.x > cullMaxX || p.y < cullMinY || p.y > cullMaxY) {
+        continue;
+      }
+
       const progress = elapsed / p.lifetime;
       const alpha = Math.max(0, 1 - progress);
       const currentSize = Math.max(0.4, p.initialSize * (1 - progress * 0.75));
 
-      this.ctx.save();
       this.ctx.shadowColor = p.glowColor;
       this.ctx.shadowBlur = 10 * alpha;
       this.ctx.globalAlpha = alpha;
@@ -510,30 +640,22 @@ export class CanvasRenderer {
       this.ctx.beginPath();
       this.ctx.arc(p.x, p.y, currentSize, 0, Math.PI * 2);
       this.ctx.fill();
-      this.ctx.restore();
-
-      active.push(p);
     }
 
     this.ctx.restore();
-    return active;
   }
 
   /**
-   * Master render pipeline executing strict visual hierarchy in world space:
-   * 1. Screen Clear (#0a0a0c)
-   * 2. Camera Transform Applied
-   * 3. Infinite Dot Grid with 32px pitch & lens warping
-   * 4. Spring Constraints & Proximity Guides
-   * 5. Velocity Trails
-   * 6. Ambient Breathing Glow
-   * 7. Node Body & Monospace Text
-   * 8. Defrag Burst Particles
+   * Render shimmering semantic tension filaments for pairs with S >= 0.70 (culled against frustum)
    */
-  /**
-   * Render shimmering semantic tension filaments for pairs with S >= 0.70
-   */
-  private renderSemanticFilaments(filaments: SemanticFilament[], time: number): void {
+  private renderSemanticFilaments(
+    filaments: SemanticFilament[],
+    time: number,
+    cullMinX: number,
+    cullMaxX: number,
+    cullMinY: number,
+    cullMaxY: number
+  ): void {
     if (!filaments || filaments.length === 0) return;
 
     this.ctx.save();
@@ -541,6 +663,16 @@ export class CanvasRenderer {
       const { bodyA, bodyB, similarity } = filaments[i];
       const posA = bodyA.position;
       const posB = bodyB.position;
+
+      // Frustum culling
+      const minX = posA.x < posB.x ? posA.x : posB.x;
+      const maxX = posA.x > posB.x ? posA.x : posB.x;
+      const minY = posA.y < posB.y ? posA.y : posB.y;
+      const maxY = posA.y > posB.y ? posA.y : posB.y;
+
+      if (maxX < cullMinX || minX > cullMaxX || maxY < cullMinY || minY > cullMaxY) {
+        continue;
+      }
 
       const dx = posB.x - posA.x;
       const dy = posB.y - posA.y;
@@ -579,12 +711,12 @@ export class CanvasRenderer {
    * Master render pipeline executing strict visual hierarchy in world space:
    * 1. Screen Clear (#0a0a0c)
    * 2. Camera Transform Applied
-   * 3. Infinite Dot Grid with 32px pitch & lens warping
-   * 4. Spring Constraints & Semantic Filaments & Proximity Guides
-   * 5. Velocity Trails
-   * 6. Ambient Breathing Glow (Cluster Tinted)
-   * 7. Node Body & Monospace Text (Cluster Tinted)
-   * 8. Defrag Burst Particles
+   * 3. Infinite Dot Grid with 32px pitch & lens warping (culled)
+   * 4. Spring Constraints & Semantic Filaments & Proximity Guides (culled)
+   * 5. Velocity Trails (culled)
+   * 6. Ambient Breathing Glow (Cluster Tinted, offscreen sprites, culled)
+   * 7. Node Body & Monospace Text (Cluster Tinted, cached gradients & text wrap, culled)
+   * 8. Defrag Burst Particles (pooled, culled)
    */
   public renderFrame(
     nodeBodies: Matter.Body[],
@@ -595,7 +727,7 @@ export class CanvasRenderer {
     camera: CameraController,
     cursorScreen: { x: number; y: number } | null = null,
     semanticFilaments: SemanticFilament[] = []
-  ): BurstParticle[] {
+  ): void {
     const width = this.logicalWidth;
     const height = this.logicalHeight;
     const now = performance.now();
@@ -612,19 +744,27 @@ export class CanvasRenderer {
     // Compute cursor position in world space
     const cursorWorld = cursorScreen ? camera.screenToWorld(cursorScreen.x, cursorScreen.y) : null;
 
+    // Viewport frustum culling bounds in world coordinates with 120px safety margin
+    const bounds = camera.getVisibleBounds(width, height);
+    const PADDING = 120;
+    const cullMinX = bounds.minX - PADDING;
+    const cullMaxX = bounds.maxX + PADDING;
+    const cullMinY = bounds.minY - PADDING;
+    const cullMaxY = bounds.maxY + PADDING;
+
     // 2. Enter Camera World Transform
     this.ctx.save();
     this.ctx.translate(camera.x, camera.y);
     this.ctx.scale(camera.zoom, camera.zoom);
 
-    // 3. Render Infinite Dot Grid
+    // 3. Render Infinite Dot Grid (already bounds-culled)
     this.renderBackground(width, height, camera, cursorWorld);
 
-    // 4. Render Semantic Tension Filaments
-    this.renderSemanticFilaments(semanticFilaments, now);
+    // 4. Render Semantic Tension Filaments (culled)
+    this.renderSemanticFilaments(semanticFilaments, now, cullMinX, cullMaxX, cullMinY, cullMaxY);
 
-    // 5. Render Spring Constraints
-    this.renderSpringConstraints(springConstraints);
+    // 5. Render Spring Constraints (culled)
+    this.renderSpringConstraints(springConstraints, cullMinX, cullMaxX, cullMinY, cullMaxY);
 
     // 6. Render Proximity Guides
     this.renderProximityGuides(mouseConstraint.body, nodeBodies, hasConnection);
@@ -632,17 +772,15 @@ export class CanvasRenderer {
     // 7. Render Mouse Tether
     this.renderMouseTether(mouseConstraint);
 
-    // 8. Visual Hierarchy: Trails -> Breathing Glow -> Node Body & Monospace Text
-    this.renderVelocityTrails(nodeBodies);
-    this.renderBreathingGlows(nodeBodies, now);
-    this.renderNodeBodies(nodeBodies);
+    // 8. Visual Hierarchy: Trails -> Breathing Glow -> Node Body & Monospace Text (all culled)
+    this.renderVelocityTrails(nodeBodies, cullMinX, cullMaxX, cullMinY, cullMaxY);
+    this.renderBreathingGlows(nodeBodies, now, cullMinX, cullMaxX, cullMinY, cullMaxY);
+    this.renderNodeBodies(nodeBodies, cullMinX, cullMaxX, cullMinY, cullMaxY);
 
-    // 9. Defrag Burst Particles
-    const activeParticles = this.renderBurstParticles(burstParticles);
+    // 9. Defrag Burst Particles (pooled, culled)
+    this.renderBurstParticles(burstParticles, cullMinX, cullMaxX, cullMinY, cullMaxY);
 
     // 10. Exit Camera World Transform
     this.ctx.restore();
-
-    return activeParticles;
   }
 }

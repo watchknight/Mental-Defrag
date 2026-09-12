@@ -21,6 +21,7 @@ export interface NodeData {
   embedding?: Float32Array;
   clusterId?: number;
   clusterColor?: ClusterColor;
+  wrappedLines?: string[];
 }
 
 export interface SpringData {
@@ -41,6 +42,71 @@ export interface BurstParticle {
   fillColor: string;
   birthTime: number;
   lifetime: number; // 600ms
+  active: boolean;
+}
+
+/**
+ * Pre-allocated pool of reusable burst particles (capacity 150)
+ * Eliminates garbage collector churn during defrag explosions.
+ */
+export class ParticlePool {
+  public particles: BurstParticle[];
+  public readonly capacity: number = 150;
+
+  constructor(capacity: number = 150) {
+    this.capacity = capacity;
+    this.particles = new Array(capacity);
+    for (let i = 0; i < capacity; i++) {
+      this.particles[i] = {
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        initialSize: 2.5,
+        glowColor: 'rgba(56, 189, 248, 0.85)',
+        fillColor: '#38bdf8',
+        birthTime: 0,
+        lifetime: 600,
+        active: false,
+      };
+    }
+  }
+
+  public spawn(
+    x: number,
+    y: number,
+    vx: number,
+    vy: number,
+    initialSize: number,
+    glowColor: string,
+    fillColor: string,
+    birthTime: number,
+    lifetime: number = 600
+  ): BurstParticle | null {
+    for (let i = 0; i < this.capacity; i++) {
+      const p = this.particles[i];
+      if (!p.active) {
+        p.x = x;
+        p.y = y;
+        p.vx = vx;
+        p.vy = vy;
+        p.initialSize = initialSize;
+        p.glowColor = glowColor;
+        p.fillColor = fillColor;
+        p.birthTime = birthTime;
+        p.lifetime = lifetime;
+        p.active = true;
+        return p;
+      }
+    }
+    return null;
+  }
+
+  public reset(): void {
+    for (let i = 0; i < this.capacity; i++) {
+      this.particles[i].active = false;
+    }
+  }
 }
 
 export interface PhysicsEngineOptions {
@@ -74,11 +140,14 @@ export class PhysicsEngine {
   public mouseConstraint: Matter.MouseConstraint;
   public mouse: Matter.Mouse;
   public isPanning: boolean = false;
+  public semanticForces: SemanticForcesManager;
 
   public nodeBodies: Matter.Body[] = [];
   public springConstraints: Matter.Constraint[] = [];
-  public semanticForces: SemanticForcesManager;
-  private burstParticles: BurstParticle[] = [];
+  public particlePool: ParticlePool = new ParticlePool(150);
+  public get burstParticles(): BurstParticle[] {
+    return this.particlePool.particles;
+  }
 
   private animFrameId: number | null = null;
   private dpr: number = 1;
@@ -263,25 +332,6 @@ export class PhysicsEngine {
         this.mouseConstraint,
         this.hasConnection.bind(this)
       );
-    });
-
-    // Setup FPS runner tracking
-    Events.on(this.runner, 'afterTick', () => {
-      this.frameCount++;
-      const now = performance.now();
-      const delta = now - this.lastFpsCalcTime;
-      if (delta >= 500) {
-        const fps = Math.round((this.frameCount * 1000) / delta);
-        this.frameCount = 0;
-        this.lastFpsCalcTime = now;
-        if (this.onFpsUpdate) {
-          this.onFpsUpdate(fps);
-        }
-      }
-
-      if (this.mouseConstraint.body) {
-        this.requestSave();
-      }
     });
 
     // Drag events
@@ -508,7 +558,7 @@ export class PhysicsEngine {
   public defragNode(body: Matter.Body): void {
     const { x, y } = body.position;
 
-    // 1. Spawn 18 glowing radial micro-particles
+    // 1. Spawn 18 glowing radial micro-particles from pre-allocated pool
     const particleCount = 18;
     const now = performance.now();
     const colorPalette = [
@@ -523,17 +573,17 @@ export class PhysicsEngine {
       const speed = 2.4 + Math.random() * 4.2;
       const palette = colorPalette[Math.floor(Math.random() * colorPalette.length)];
 
-      this.burstParticles.push({
+      this.particlePool.spawn(
         x,
         y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        initialSize: 2.5 + Math.random() * 2.2,
-        glowColor: palette.glow,
-        fillColor: palette.fill,
-        birthTime: now,
-        lifetime: 600,
-      });
+        Math.cos(angle) * speed,
+        Math.sin(angle) * speed,
+        2.5 + Math.random() * 2.2,
+        palette.glow,
+        palette.fill,
+        now,
+        600
+      );
     }
 
     // 2. Release MouseConstraint if this body was being dragged
@@ -766,11 +816,11 @@ export class PhysicsEngine {
     }
 
     // 3. Delegate execution to CanvasRenderer with camera transform & semantic filaments
-    this.burstParticles = this.renderer.renderFrame(
+    this.renderer.renderFrame(
       this.nodeBodies,
       this.springConstraints,
       this.mouseConstraint,
-      this.burstParticles,
+      this.particlePool.particles,
       this.hasConnection.bind(this),
       this.camera,
       this.cursorPosition,
@@ -783,15 +833,54 @@ export class PhysicsEngine {
   }
 
   /**
-   * Start physics runner and animation frame loop
+   * Start deterministic fixed timestep physics loop and animation frame loop
    */
   public start(): void {
-    Runner.run(this.runner, this.engine);
+    const FIXED_DELTA = 1000 / 60; // 16.66667ms
+    const MAX_FRAME_DELTA = 100; // clamp to 100ms to prevent spiral of death
+    let accumulator = 0;
+    let lastTime = performance.now();
 
-    const loop = () => {
+    const loop = (currentTime: number) => {
+      let elapsed = currentTime - lastTime;
+      lastTime = currentTime;
+
+      // Clamp max frame delta to prevent spiral of death if tab was unfocused or lagged
+      if (elapsed > MAX_FRAME_DELTA) {
+        elapsed = MAX_FRAME_DELTA;
+      }
+      if (elapsed < 0) {
+        elapsed = 0;
+      }
+
+      accumulator += elapsed;
+
+      // Substep deterministic physics at exact 60Hz intervals
+      while (accumulator >= FIXED_DELTA) {
+        Engine.update(this.engine, FIXED_DELTA);
+        accumulator -= FIXED_DELTA;
+      }
+
+      // Display refresh FPS tracking
+      this.frameCount++;
+      const fpsDelta = currentTime - this.lastFpsCalcTime;
+      if (fpsDelta >= 500) {
+        const fps = Math.round((this.frameCount * 1000) / fpsDelta);
+        this.frameCount = 0;
+        this.lastFpsCalcTime = currentTime;
+        if (this.onFpsUpdate) {
+          this.onFpsUpdate(fps);
+        }
+      }
+
+      if (this.mouseConstraint.body) {
+        this.requestSave();
+      }
+
       this.renderFrame();
       this.animFrameId = requestAnimationFrame(loop);
     };
+
     this.animFrameId = requestAnimationFrame(loop);
   }
 
