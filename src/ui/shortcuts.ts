@@ -180,6 +180,10 @@ export class ShortcutEngine {
   /**
    * Frames all active nodes with 15% margin padding
    */
+  public frameAll(): void {
+    this.frameAllNodes();
+  }
+
   public frameAllNodes(): void {
     const nodes = this.physics.nodeBodies;
     const camera = this.physics.camera;

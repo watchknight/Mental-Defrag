@@ -7,7 +7,7 @@ import { ShortcutEngine, showHudToast } from './ui/shortcuts';
 import { ExportModal } from './ui/exportModal';
 import { NodeManager } from './physics/nodeManager';
 import { DropOverlay } from './ui/dropOverlay';
-import { Activity, Layers, Share2, Disc, Volume2, VolumeX, HelpCircle, createIcons } from 'lucide';
+import { HUD } from './ui/hud';
 
 const canvas = document.getElementById('physics-canvas') as HTMLCanvasElement;
 
@@ -15,115 +15,18 @@ if (!canvas) {
   throw new Error('Canvas element #physics-canvas not found');
 }
 
-// 1. Populate HUD diagnostics
-const hudPanel = document.querySelector('.hud-panel');
-if (hudPanel) {
-  const subtitle = hudPanel.querySelector('.hud-subtitle');
-  if (subtitle) {
-    subtitle.textContent = 'Double-click or [N] to create • [Del] to defrag • [F] frame • [S] cluster • [E] export • [?] shortcuts';
-  }
-
-  const statsContainer = document.createElement('div');
-  statsContainer.className = 'hud-stats';
-  statsContainer.innerHTML = `
-    <div class="stat-item">
-      <i data-lucide="activity"></i>
-      <span id="fps-display">60 FPS</span>
-    </div>
-    <div class="stat-item">
-      <i data-lucide="layers"></i>
-      <span id="node-count-display">0 Nodes</span>
-    </div>
-    <div class="stat-item">
-      <i data-lucide="share-2"></i>
-      <span id="link-count-display">0 Links</span>
-    </div>
-    <div class="stat-item">
-      <i data-lucide="disc"></i>
-      <span id="zoom-display">100%</span>
-    </div>
-  `;
-  hudPanel.appendChild(statsContainer);
-}
-
-const updateNodeCountUI = (count: number) => {
-  const nodeCountDisplay = document.getElementById('node-count-display');
-  if (nodeCountDisplay) {
-    nodeCountDisplay.textContent = `${count} Node${count === 1 ? '' : 's'}`;
-  }
-};
-
-const updateLinkCountUI = (count: number) => {
-  const linkCountDisplay = document.getElementById('link-count-display');
-  if (linkCountDisplay) {
-    linkCountDisplay.textContent = `${count} Link${count === 1 ? '' : 's'}`;
-  }
-};
-
-const updateZoomUI = (zoom: number) => {
-  const zoomDisplay = document.getElementById('zoom-display');
-  if (zoomDisplay) {
-    zoomDisplay.textContent = `${Math.round(zoom * 100)}%`;
-  }
-};
-
-// 2. Audio and Help Control Button Setup
-const audioBtn = document.getElementById('audio-control-btn');
-const helpBtn = document.getElementById('help-btn');
-
-function renderAudioIcon(isMuted: boolean) {
-  if (!audioBtn) return;
-  audioBtn.innerHTML = isMuted
-    ? '<i data-lucide="volume-x"></i>'
-    : '<i data-lucide="volume-2"></i>';
-  createIcons({
-    icons: {
-      Volume2,
-      VolumeX,
-      HelpCircle,
-    },
-  });
-}
-
-if (audioBtn) {
-  renderAudioIcon(soundFX.getIsMuted());
-
-  audioBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const isMuted = soundFX.toggleMute();
-    renderAudioIcon(isMuted);
-    showHudToast(isMuted ? 'Sound: Muted' : 'Sound: Enabled');
-  });
-}
-
-// Render base HUD icons
-createIcons({
-  icons: {
-    Activity,
-    Layers,
-    Share2,
-    Disc,
-    Volume2,
-    VolumeX,
-    HelpCircle,
-  },
-});
-
-// 3. Initialize custom canvas physics engine with sound hooks
+// 1. Initialize custom canvas physics engine with sound hooks
 const physics = new PhysicsEngine({
   canvas,
   onFpsUpdate: (fps) => {
-    const fpsDisplay = document.getElementById('fps-display');
-    if (fpsDisplay) {
-      fpsDisplay.textContent = `${fps} FPS`;
-    }
-    updateZoomUI(physics.camera.zoom);
+    hud.updateFps(fps);
+    hud.updateZoom(physics.camera.zoom);
   },
   onNodeCountUpdate: (count) => {
-    updateNodeCountUI(count);
+    hud.updateNodeCount(count);
   },
   onLinkCountUpdate: (count) => {
-    updateLinkCountUI(count);
+    hud.updateLinkCount(count);
   },
   onCollision: () => {
     soundFX.playClick();
@@ -136,14 +39,58 @@ const physics = new PhysicsEngine({
   },
 });
 
-// 3b. Initialize NodeManager & Full-Window Drag-and-Drop Ingestion Overlay
+// 2. Initialize NodeManager, Full-Window Drag-and-Drop Ingestion Overlay, & Export Modal
 const nodeManager = new NodeManager(physics);
 new DropOverlay({ physics, nodeManager });
-
-// 3c. Initialize Export & Backup Modal
 const exportModal = new ExportModal({ physics, nodeManager });
 
-// 3d. Initialize Minimalist Radar Mini-Map with export trigger
+// 3. Initialize Shortcut Engine
+const shortcuts = new ShortcutEngine({
+  physics,
+  onSpawnRequested: (sx, sy) => {
+    promptSpawnAt(sx, sy);
+  },
+  onMuteToggled: (isMuted) => {
+    hud.updateSound(isMuted);
+  },
+  onAutoClusterToggled: (enabled) => {
+    hud.updateAutoCluster(enabled);
+  },
+  onExportRequested: () => {
+    exportModal.open();
+  },
+});
+
+// 4. Initialize Modern HUD Manager with Desktop Collapsible Bar & Mobile Action Dock
+const hud = new HUD({
+  onSpawnRequested: () => {
+    const vpHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    promptSpawnAt(window.innerWidth / 2, Math.round(vpHeight * 0.38));
+  },
+  onFrameRequested: () => {
+    shortcuts.frameAll();
+  },
+  onAutoClusterToggle: () => {
+    const enabled = physics.toggleAutoClustering();
+    showHudToast(enabled ? 'Semantic Clustering: ON' : 'Semantic Clustering: OFF');
+    return enabled;
+  },
+  onSoundToggle: () => {
+    const isMuted = soundFX.toggleMute();
+    showHudToast(isMuted ? 'Sound: Muted' : 'Sound: Enabled');
+    return isMuted;
+  },
+  onExportRequested: () => {
+    exportModal.open();
+  },
+  onHelpRequested: () => {
+    shortcuts.toggleModal();
+  },
+  initialSoundMuted: soundFX.getIsMuted(),
+  initialAutoCluster: true,
+});
+
+// 5. Initialize Minimalist Radar Mini-Map with export trigger
 const minimap = new MiniMap({
   camera: physics.camera,
   onExportClick: () => exportModal.open(),
@@ -152,50 +99,6 @@ const minimap = new MiniMap({
 physics.onAfterRender = () => {
   minimap.render(physics.nodeBodies, physics.springConstraints, physics.camera);
 };
-
-// 3d. Auto-Cluster Pill Button & Shortcut Engine
-const autoClusterBtn = document.getElementById('auto-cluster-btn');
-
-function updateAutoClusterUI(enabled: boolean) {
-  if (!autoClusterBtn) return;
-  if (enabled) {
-    autoClusterBtn.classList.add('active');
-  } else {
-    autoClusterBtn.classList.remove('active');
-  }
-}
-
-if (autoClusterBtn) {
-  autoClusterBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const enabled = physics.toggleAutoClustering();
-    updateAutoClusterUI(enabled);
-    showHudToast(enabled ? 'Semantic Clustering: ON' : 'Semantic Clustering: OFF');
-  });
-}
-
-const shortcuts = new ShortcutEngine({
-  physics,
-  onSpawnRequested: (sx, sy) => {
-    promptSpawnAt(sx, sy);
-  },
-  onMuteToggled: (isMuted) => {
-    renderAudioIcon(isMuted);
-  },
-  onAutoClusterToggled: (enabled) => {
-    updateAutoClusterUI(enabled);
-  },
-  onExportRequested: () => {
-    exportModal.open();
-  },
-});
-
-if (helpBtn) {
-  helpBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    shortcuts.toggleModal();
-  });
-}
 
 // 4. Session Restore: Attempt to read saved state from localStorage
 const savedState = loadCanvasState();
@@ -219,8 +122,8 @@ if (!isRestored) {
   physics.createNode(cx + 250, cy + 120, 'Organic fruits & vegetables');
 }
 
-updateNodeCountUI(physics.nodeBodies.length);
-updateLinkCountUI(physics.springConstraints.length);
+hud.updateNodeCount(physics.nodeBodies.length);
+hud.updateLinkCount(physics.springConstraints.length);
 
 // Start physics & custom rendering loop
 physics.start();
@@ -263,7 +166,7 @@ canvas.addEventListener(
       physics.camera.zoomAt(e.clientX, e.clientY, zoomFactor);
     }
 
-    updateZoomUI(physics.camera.targetZoom);
+    hud.updateZoom(physics.camera.targetZoom);
   },
   { passive: false }
 );
@@ -548,7 +451,7 @@ window.addEventListener('pointermove', (e: PointerEvent) => {
       const zoomRatio = currentDist / initialPinchDist;
       const factor = 1 + (zoomRatio - 1) * 0.45;
       physics.camera.zoomAt(midX, midY, factor);
-      updateZoomUI(physics.camera.targetZoom);
+      hud.updateZoom(physics.camera.targetZoom);
       initialPinchDist = currentDist;
     }
 

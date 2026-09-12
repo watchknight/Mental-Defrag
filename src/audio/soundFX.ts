@@ -14,31 +14,74 @@ export class SoundFX {
     if (storedMute !== null) {
       this.isMuted = storedMute === 'true';
     }
+    this.setupAutoplayUnlock();
+  }
+
+  /**
+   * One-time global interaction listener to unlock AudioContext on touch/click.
+   * Handles iOS Safari and Android Chrome autoplay policy without console warnings or blocking physics.
+   */
+  private setupAutoplayUnlock(): void {
+    const unlock = () => {
+      try {
+        const ctx = this.ensureContext();
+        if (ctx && ctx.state === 'suspended') {
+          ctx.resume().catch(() => {});
+        }
+      } catch {
+        // Fail silently without blocking physics or rendering
+      }
+    };
+
+    window.addEventListener('pointerdown', unlock, { once: true, capture: true });
+    window.addEventListener('touchstart', unlock, { once: true, capture: true });
+    window.addEventListener('keydown', unlock, { once: true, capture: true });
+  }
+
+  /**
+   * Explicitly resume AudioContext if suspended. Safe to call from any UI interaction.
+   */
+  public unlockAudio(): void {
+    try {
+      const ctx = this.ensureContext();
+      if (ctx && ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+    } catch {
+      // Fail silently
+    }
   }
 
   /**
    * Initialize or resume the AudioContext on user interaction
    */
   private ensureContext(): AudioContext | null {
-    if (!this.ctx) {
-      const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (!AudioCtxClass) {
-        return null;
+    try {
+      if (!this.ctx) {
+        const AudioCtxClass =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        if (!AudioCtxClass) {
+          return null;
+        }
+        this.ctx = new AudioCtxClass();
+        this.masterGain = this.ctx.createGain();
+        this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : 1, this.ctx.currentTime);
+        this.masterGain.connect(this.ctx.destination);
+
+        // Pre-generate noise buffer for fast click playback
+        this.createNoiseBuffer();
       }
-      this.ctx = new AudioCtxClass();
-      this.masterGain = this.ctx.createGain();
-      this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : 1, this.ctx.currentTime);
-      this.masterGain.connect(this.ctx.destination);
 
-      // Pre-generate noise buffer for fast click playback
-      this.createNoiseBuffer();
+      if (this.ctx && this.ctx.state === 'suspended') {
+        this.ctx.resume().catch(() => {});
+      }
+
+      return this.ctx;
+    } catch {
+      // Fail silently
+      return null;
     }
-
-    if (this.ctx.state === 'suspended') {
-      this.ctx.resume().catch(() => {});
-    }
-
-    return this.ctx;
   }
 
   /**

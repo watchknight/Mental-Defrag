@@ -137,6 +137,80 @@ html, body {
   }
 }
 
+.hud-shortcut-expand-btn {
+  display: none;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #94a3b8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.hud-shortcut-expand-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #f8fafc;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.hud-shortcut-expand-btn.visible {
+  display: inline-flex;
+}
+
+.hud-shortcut-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  max-height: 40px;
+  opacity: 1;
+  transition: max-height 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+              margin 0.2s ease;
+  overflow: hidden;
+}
+
+.hud-shortcut-bar.collapsed {
+  max-height: 0;
+  opacity: 0;
+  margin: 0;
+  padding: 0;
+  pointer-events: none;
+}
+
+.hud-shortcut-text {
+  font-size: 0.78rem;
+  color: #94a3b8;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.hud-shortcut-close-btn {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  transition: all 0.15s ease;
+}
+
+.hud-shortcut-close-btn:hover {
+  color: #f8fafc;
+  background: rgba(255, 255, 255, 0.1);
+}
+
 .hud-subtitle {
   font-size: 0.8rem;
   color: #94a3b8;
@@ -1086,3 +1160,179 @@ kbd {
   border-color: rgba(255, 255, 255, 0.25);
   color: #f8fafc;
 }
+
+/* -------------------------------------------------------------
+   Mobile Responsive Floating Action Dock
+   ------------------------------------------------------------- */
+.mobile-action-dock {
+  position: fixed;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: rgba(15, 15, 22, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9999px;
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.55), 0 0 1px rgba(255, 255, 255, 0.15);
+  z-index: 100;
+  pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
+  animation: dock-slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes dock-slide-up {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.dock-btn {
+  position: relative;
+  min-width: 44px;
+  min-height: 44px;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
+  color: #cbd5e1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.dock-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: scale(1.06);
+}
+
+.dock-btn:active {
+  transform: scale(0.92);
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.dock-btn svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2;
+  pointer-events: none;
+}
+
+/* Primary Action: [ + New Node ] */
+.dock-btn-primary {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: rgba(56, 189, 248, 0.45);
+  color: #38bdf8;
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.25);
+}
+
+.dock-btn-primary:hover {
+  background: rgba(56, 189, 248, 0.28);
+  border-color: rgba(56, 189, 248, 0.7);
+  color: #ffffff;
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.45);
+}
+
+/* Auto-Cluster Active state in Dock */
+.dock-btn.active {
+  background: rgba(168, 85, 247, 0.18);
+  border-color: rgba(168, 85, 247, 0.5);
+  color: #e9d5ff;
+  box-shadow: 0 0 16px rgba(168, 85, 247, 0.3);
+}
+
+.dock-pulse-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #a855f7;
+  box-shadow: 0 0 6px #a855f7;
+  animation: cluster-dot-pulse 1.8s infinite ease-in-out;
+}
+
+/* Sound Muted state in Dock */
+.dock-btn.muted {
+  color: #f43f5e;
+  border-color: rgba(244, 63, 94, 0.35);
+  background: rgba(244, 63, 94, 0.08);
+}
+
+/* Accessible Tooltip / Micro-Label */
+.dock-tooltip {
+  display: none;
+}
+
+/* -------------------------------------------------------------
+   Touch Device Responsive Layout & Safe Zones
+   ------------------------------------------------------------- */
+body.touch-device .hud-shortcut-bar,
+body.touch-device .hud-subtitle,
+body.touch-device .hud-shortcut-expand-btn {
+  display: none !important;
+}
+
+body.touch-device #ui-overlay {
+  top: max(1rem, env(safe-area-inset-top, 1rem));
+  left: max(1rem, env(safe-area-inset-left, 1rem));
+}
+
+body.touch-device .hud-panel {
+  padding: 0.65rem 0.95rem;
+  gap: 0.25rem;
+}
+
+body.touch-device .hud-title {
+  font-size: 1.05rem;
+}
+
+body.touch-device .hud-stats {
+  gap: 0.65rem;
+  padding-top: 0.35rem;
+}
+
+body.touch-device .stat-item {
+  font-size: 0.7rem;
+}
+
+/* Position minimap and toast safely above the dock on touch devices */
+body.touch-device .minimap-container {
+  bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+  right: 14px;
+  width: 140px;
+  height: 95px;
+}
+
+body.touch-device .minimap-canvas {
+  width: 140px;
+  height: 95px;
+}
+
+body.touch-device .hud-toast {
+  bottom: calc(78px + env(safe-area-inset-bottom, 0px));
+}
+
+/* Hide desktop top-right controls on touch devices since integrated in dock */
+body.touch-device .top-right-controls {
+  display: none;
+}
+
