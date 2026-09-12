@@ -1,7 +1,7 @@
 import {
   Plus,
   Maximize2,
-  Sparkles,
+  Orbit,
   Volume2,
   VolumeX,
   Share2,
@@ -215,8 +215,7 @@ export class HUD {
           <span class="dock-tooltip">Frame All</span>
         </button>
         <button id="dock-cluster-btn" class="dock-btn ${this.isAutoCluster ? 'active' : ''}" aria-label="Toggle Auto-Clustering" title="Auto-Cluster">
-          <i data-lucide="sparkles"></i>
-          <span class="dock-pulse-dot"></span>
+          <i data-lucide="orbit"></i>
           <span class="dock-tooltip">Auto-Cluster</span>
         </button>
         <button id="dock-sound-btn" class="dock-btn ${this.isMuted ? 'muted' : ''}" aria-label="Toggle Sound Effects" title="Toggle Sound">
@@ -419,7 +418,7 @@ export class HUD {
       icons: {
         Plus,
         Maximize2,
-        Sparkles,
+        Orbit,
         Volume2,
         VolumeX,
         Share2,
