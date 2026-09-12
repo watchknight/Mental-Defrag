@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Mental Defrag</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="physics-canvas"></canvas>
+      <div id="ui-overlay">
+        <div class="hud-panel">
+          <div class="hud-header-row">
+            <h1 class="hud-title">Mental Defrag</h1>
+            <button id="auto-cluster-btn" class="auto-cluster-btn active" title="Toggle Semantic Auto-Clustering (S)" aria-label="Toggle Semantic Auto-Clustering">
+              <span class="cluster-pulse-dot"></span>
+              <span class="cluster-btn-text">Auto-Cluster</span>
+            </button>
+          </div>
+          <p class="hud-subtitle">Double-click or [N] to create • [Del] to defrag • [F] frame • [S] cluster • [?] shortcuts</p>
+        </div>
+      </div>
+      <div class="top-right-controls">
+        <button id="help-btn" class="control-icon-btn" aria-label="Keyboard Shortcuts" title="Shortcuts Guide (?)">
+          <i data-lucide="help-circle">?</i>
+        </button>
+        <button id="audio-control-btn" class="control-icon-btn" aria-label="Toggle Mute" title="Toggle Mute (M)">
+          <i data-lucide="volume-2" id="audio-icon"></i>
+        </button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
